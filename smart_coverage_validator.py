@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from openai import OpenAI
 from pathlib import Path
 import logging
@@ -18,10 +18,11 @@ class SmartPreMedValidator:
     for pre-med student needs
     """
     
-    def __init__(self, school_name: str, content_path: str):
-        """Initialize validator with school name and path to content"""
+    def __init__(self, school_name: str, web_content_path: str, pdf_content_path: str):
+        """Initialize validator with school name and paths to content"""
         self.school_name = school_name
-        self.content_path = Path(content_path)
+        self.web_content_path = Path(web_content_path)
+        self.pdf_content_path = Path(pdf_content_path)
         self.setup_logging()
         
         # Ensure OpenAI API key is set
@@ -31,40 +32,43 @@ class SmartPreMedValidator:
         # Initialize OpenAI client
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
-        # Priority content patterns
-        self.priority_patterns = {
-            'admissions': [
-                r'admissions?',
-                r'requirements?',
-                r'application',
-                r'deadlines?',
-                r'MCAT',
-                r'GPA',
-                r'prerequisites?'
-            ],
-            'financial': [
-                r'financial aid',
-                r'tuition',
-                r'scholarships?',
-                r'costs?',
-                r'funding',
-                r'loans?'
-            ],
-            'curriculum': [
-                r'curriculum',
-                r'courses?',
-                r'program',
-                r'clinical',
-                r'rotations?',
-                r'clerkships?'
-            ],
-            'student_life': [
-                r'student life',
-                r'housing',
-                r'campus',
-                r'activities',
-                r'organizations?'
-            ]
+        # Enhanced category mapping with more specific terms
+        self.category_map = {
+            "Admissions Process & Requirements": {
+                "must_include": ["admissions process", "application requirements", "how to apply"],
+                "primary": ["admissions criteria", "application deadline", "prerequisites", "MCAT requirement"],
+                "related": ["selection process", "interview", "eligibility", "application review"]
+            },
+            "Financial Information": {
+                "must_include": ["tuition", "cost of attendance", "financial aid"],
+                "primary": ["scholarship", "grant", "loan", "FAFSA"],
+                "related": ["payment", "budget", "expense", "fee"]
+            },
+            "Curriculum & Academic Experience": {
+                "must_include": ["curriculum", "medical education", "course requirements"],
+                "primary": ["preclinical", "clinical training", "clerkship", "rotation"],
+                "related": ["academic program", "learning objectives", "educational"]
+            },
+            "Research & Scholarly Opportunities": {
+                "must_include": ["research opportunities", "scholarly activities", "research programs"],
+                "primary": ["laboratory research", "clinical research", "research funding"],
+                "related": ["publication", "presentation", "investigation"]
+            },
+            "Clinical Experience & Training": {
+                "must_include": ["clinical training", "patient care", "clinical experience"],
+                "primary": ["clinical rotation", "clerkship", "hospital", "patient interaction"],
+                "related": ["clinical skills", "clinical sites", "specialty"]
+            },
+            "Student Life & Support": {
+                "must_include": ["student life", "campus life", "student support"],
+                "primary": ["housing", "student organization", "wellness program"],
+                "related": ["mentoring", "counseling", "student services"]
+            },
+            "Special Programs & Opportunities": {
+                "must_include": ["special programs", "dual degree", "combined program"],
+                "primary": ["MD-PhD", "global health", "research track"],
+                "related": ["leadership", "community service", "special opportunity"]
+            }
         }
         
         # Core information categories pre-med students need
@@ -79,6 +83,18 @@ class SmartPreMedValidator:
                     "Selection criteria and evaluation process",
                     "Interview process",
                     "Unique admissions programs or pathways"
+                ]
+            },
+            {
+                "name": "Financial Information",
+                "description": "Complete understanding of costs and financial support",
+                "key_aspects": [
+                    "Tuition and fees",
+                    "Financial aid availability",
+                    "Scholarships and grants",
+                    "Loan programs",
+                    "Cost of living considerations",
+                    "Financial planning resources"
                 ]
             },
             {
@@ -115,18 +131,6 @@ class SmartPreMedValidator:
                     "Specialty exposure",
                     "Early clinical exposure programs",
                     "Clinical skills development"
-                ]
-            },
-            {
-                "name": "Financial Information",
-                "description": "Complete understanding of costs and financial support",
-                "key_aspects": [
-                    "Tuition and fees",
-                    "Financial aid availability",
-                    "Scholarships and grants",
-                    "Loan programs",
-                    "Cost of living considerations",
-                    "Financial planning resources"
                 ]
             },
             {
@@ -178,60 +182,176 @@ class SmartPreMedValidator:
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
     
-    def filter_priority_content(self, content: Dict) -> Dict:
-        """Filter content based on priority patterns"""
-        filtered_content = {}
+    def extract_pdf_text(self, pdf_data: Dict) -> str:
+        """Extract text from PDF data structure"""
+        text_parts = []
         
-        for url, page_data in content.items():
-            text = ' '.join(page_data.get('text_chunks', []))
-            
-            # Check each priority category
-            for category, patterns in self.priority_patterns.items():
-                if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
-                    if category not in filtered_content:
-                        filtered_content[category] = {}
-                    filtered_content[category][url] = page_data
+        # Extract text from pages
+        if isinstance(pdf_data.get('content', {}), dict):
+            text_pages = pdf_data['content'].get('text', [])
+            for page in text_pages:
+                if isinstance(page, dict) and 'text' in page:
+                    text_parts.append(page['text'])
         
-        return filtered_content
+        # Add metadata information
+        metadata = pdf_data.get('metadata', {})
+        if metadata:
+            text_parts.extend([
+                str(metadata.get('title', '')),
+                str(metadata.get('type', '')),
+                str(metadata.get('subtype', '')),
+                str(metadata.get('description', ''))
+            ])
+        
+        # Add extracted data
+        extracted_data = pdf_data.get('content', {}).get('extracted_data', {})
+        if extracted_data:
+            for key, values in extracted_data.items():
+                if values:
+                    text_parts.append(f"{key}: {', '.join(str(v) for v in values)}")
+        
+        # Add table data if available
+        tables = pdf_data.get('content', {}).get('tables', [])
+        if tables:
+            for page_tables in tables:
+                if isinstance(page_tables, dict) and 'tables' in page_tables:
+                    for table in page_tables['tables']:
+                        for row in table:
+                            if isinstance(row, list):
+                                text_parts.append(' '.join(str(cell) for cell in row if cell))
+        
+        # Combine all text parts
+        return '\n'.join(text_parts)
     
-    def analyze_category_coverage(self, content: Dict, category: Dict) -> Dict:
-        """
-        Use GPT-4 to analyze coverage of a specific category
-        """
-        # Get relevant content for this category
-        filtered_content = self.filter_priority_content(content)
-        relevant_category = None
+    def calculate_content_relevance(self, text: str, category_terms: Dict) -> Tuple[bool, float]:
+        """Calculate content relevance score and validate must-include terms"""
+        # Check for must-include terms
+        must_include_found = False
+        for term in category_terms['must_include']:
+            if term.lower() in text.lower():
+                must_include_found = True
+                break
         
-        if "admissions" in category["name"].lower():
-            relevant_category = "admissions"
-        elif "curriculum" in category["name"].lower():
-            relevant_category = "curriculum"
-        elif "financial" in category["name"].lower():
-            relevant_category = "financial"
-        elif "student life" in category["name"].lower():
-            relevant_category = "student_life"
+        # Calculate relevance score
+        score = 0
+        total_terms = 0
+        
+        # Primary terms are worth 2 points
+        for term in category_terms['primary']:
+            if re.search(rf'\b{term}\b', text, re.IGNORECASE):
+                score += 2
+            total_terms += 2
+        
+        # Related terms are worth 1 point
+        for term in category_terms['related']:
+            if re.search(rf'\b{term}\b', text, re.IGNORECASE):
+                score += 1
+            total_terms += 1
+        
+        # Calculate relevance score as percentage
+        relevance_score = score / total_terms if total_terms > 0 else 0
+        
+        return must_include_found, relevance_score
+    
+    def filter_content_by_category(self, content: Dict, category: Dict, source_type: str = 'web') -> Dict:
+        """Filter content based on category terms with relevance scoring"""
+        filtered_content = {}
+        category_terms = self.category_map.get(category["name"])
+        
+        if not category_terms:
+            return filtered_content
+        
+        if source_type == 'web':
+            for url, page_data in content.items():
+                text = ' '.join(page_data.get('text_chunks', []))
+                must_include, relevance = self.calculate_content_relevance(text, category_terms)
+                
+                if must_include and relevance > 0.2:  # Require at least 20% relevance
+                    filtered_content[url] = {
+                        **page_data,
+                        'relevance_score': relevance
+                    }
+        
+        elif source_type == 'pdf':
+            for filename, pdf_data in content.items():
+                full_text = self.extract_pdf_text(pdf_data)
+                must_include, relevance = self.calculate_content_relevance(full_text, category_terms)
+                
+                if must_include and relevance > 0.2:  # Require at least 20% relevance
+                    filtered_content[filename] = {
+                        'metadata': pdf_data.get('metadata', {}),
+                        'content': full_text,
+                        'extracted_data': pdf_data.get('content', {}).get('extracted_data', {}),
+                        'relevance_score': relevance
+                    }
+        
+        # Sort content by relevance score
+        return dict(sorted(
+            filtered_content.items(),
+            key=lambda x: x[1]['relevance_score'],
+            reverse=True
+        ))
+    
+    def analyze_category_coverage(self, web_content: Dict, pdf_content: Dict, category: Dict) -> Dict:
+        """
+        Use GPT-4 to analyze coverage of a specific category from both web and PDF sources
+        """
+        # Filter content by category
+        filtered_web = self.filter_content_by_category(web_content, category, 'web')
+        filtered_pdf = self.filter_content_by_category(pdf_content, category, 'pdf')
+        
+        # Log filtering results
+        self.logger.info(f"Filtered web content for {category['name']}: {len(filtered_web)} items")
+        self.logger.info(f"Filtered PDF content for {category['name']}: {len(filtered_pdf)} items")
         
         # Prepare content for analysis
-        content_text = ""
-        if relevant_category and relevant_category in filtered_content:
-            for url, page_data in filtered_content[relevant_category].items():
-                content_text += f"\nPage: {url}\n"
-                content_text += f"Title: {page_data['title']}\n"
-                content_text += "\n".join(page_data.get('text_chunks', []))
-        else:
-            # Fallback to using all content if no specific category match
-            sample_content = dict(list(content.items())[:5])  # Take first 5 pages
-            for url, page_data in sample_content.items():
-                content_text += f"\nPage: {url}\n"
-                content_text += f"Title: {page_data['title']}\n"
-                content_text += "\n".join(page_data.get('text_chunks', []))
+        content_text = "=== Website Content ===\n"
+        web_content_found = False
+        
+        # Take top 10 most relevant web pages
+        for url, page_data in list(filtered_web.items())[:10]:
+            content_text += f"\nPage: {url}\n"
+            content_text += f"Title: {page_data.get('title', 'No title')}\n"
+            content_text += f"Relevance Score: {page_data['relevance_score']:.2%}\n"
+            content_text += "\n".join(page_data.get('text_chunks', []))
+            web_content_found = True
+        
+        if not web_content_found:
+            content_text += "\nNo relevant website content found.\n"
+        
+        content_text += "\n\n=== PDF Documents ===\n"
+        pdf_content_found = False
+        
+        # Take top 10 most relevant PDFs
+        for filename, pdf_data in list(filtered_pdf.items())[:10]:
+            content_text += f"\nDocument: {filename}\n"
+            content_text += f"Type: {pdf_data['metadata'].get('type', 'Unknown')}\n"
+            content_text += f"Subtype: {pdf_data['metadata'].get('subtype', 'Unknown')}\n"
+            content_text += f"Relevance Score: {pdf_data['relevance_score']:.2%}\n"
+            content_text += f"Content:\n{pdf_data['content']}\n"
+            
+            # Include extracted data if available
+            if pdf_data['extracted_data']:
+                content_text += "\nExtracted Information:\n"
+                for key, values in pdf_data['extracted_data'].items():
+                    if values:
+                        content_text += f"{key}: {', '.join(str(v) for v in values)}\n"
+            pdf_content_found = True
+        
+        if not pdf_content_found:
+            content_text += "\nNo relevant PDF documents found.\n"
+        
+        # Log content analysis
+        self.logger.info(f"Analyzing content for category: {category['name']}")
+        self.logger.info(f"Web content found: {web_content_found}")
+        self.logger.info(f"PDF content found: {pdf_content_found}")
         
         # Truncate content to fit token limits while keeping complete sentences
         content_text = self.smart_truncate(content_text, 8000)
         
         # Construct prompt for GPT-4
         prompt = f"""
-        You are an expert in medical education and pre-medical advising. Analyze the following content from {self.school_name}'s website regarding {category['name']}.
+        You are an expert in medical education and pre-medical advising. Analyze the following content from {self.school_name}'s website and documents regarding {category['name']}.
 
         Category Description: {category['description']}
         Key Aspects to Look For:
@@ -243,15 +363,17 @@ class SmartPreMedValidator:
         3. Are there any significant gaps in coverage?
         4. Are there unique programs or opportunities that should be highlighted?
         5. What additional information would be valuable for pre-med students?
+        6. How well do the website and PDF documents complement each other?
 
         Content to analyze:
         {content_text}
 
         Provide a structured analysis with:
-        1. Coverage Assessment (0-100%)
-        2. Strengths
-        3. Gaps
-        4. Recommendations
+        1. Coverage Assessment (0-100% with breakdown by key aspect)
+        2. Strengths (specific examples from both website and PDFs)
+        3. Gaps (missing or inadequately covered information)
+        4. Website vs PDF Coverage Comparison (how they complement each other)
+        5. Recommendations (specific suggestions for improvement)
         """
 
         max_retries = 3
@@ -260,9 +382,9 @@ class SmartPreMedValidator:
         for attempt in range(max_retries):
             try:
                 response = self.client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4",
                     messages=[
-                        {"role": "system", "content": "You are an expert medical education advisor analyzing website content coverage."},
+                        {"role": "system", "content": "You are an expert medical education advisor analyzing website and document content coverage."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.2
@@ -301,31 +423,44 @@ class SmartPreMedValidator:
         # If no period found, truncate at max_chars
         return text[:max_chars]
     
+    def load_content(self) -> tuple[Dict, Dict]:
+        """Load web and PDF content"""
+        try:
+            # Load web content
+            with open(self.web_content_path) as f:
+                web_content = json.load(f)
+            
+            # Load PDF content
+            with open(self.pdf_content_path) as f:
+                pdf_content = json.load(f)
+            
+            # Log content loading
+            self.logger.info(f"Loaded {len(web_content)} web pages")
+            self.logger.info(f"Loaded {len(pdf_content)} PDF documents")
+            
+            return web_content, pdf_content
+            
+        except Exception as e:
+            self.logger.error(f"Error loading content: {e}")
+            raise
+    
     def validate_coverage(self) -> List[Dict]:
         """
-        Validate coverage across all categories
+        Validate coverage across all categories using both web and PDF content
         """
-        content = self.load_content()
+        web_content, pdf_content = self.load_content()
         results = []
         
         self.logger.info(f"Starting content validation for {self.school_name}")
+        self.logger.info(f"Analyzing {len(web_content)} web pages and {len(pdf_content)} PDF documents")
         
         for category in self.core_categories:
             self.logger.info(f"Analyzing category: {category['name']}")
-            result = self.analyze_category_coverage(content, category)
+            result = self.analyze_category_coverage(web_content, pdf_content, category)
             results.append(result)
             
         self.logger.info("Validation complete")
         return results
-    
-    def load_content(self) -> Dict:
-        """Load scraped content from JSON file"""
-        try:
-            with open(self.content_path) as f:
-                return json.load(f)
-        except Exception as e:
-            self.logger.error(f"Error loading content from {self.content_path}: {e}")
-            raise
     
     def generate_report(self, results: List[Dict]) -> str:
         """
@@ -338,6 +473,7 @@ class SmartPreMedValidator:
         
         Executive Summary
         ================
+        This analysis includes both website content and PDF documents.
         """
         
         for result in results:
@@ -360,7 +496,8 @@ def main():
     """Main function to run the validator"""
     validator = SmartPreMedValidator(
         school_name="Mount Sinai",
-        content_path="scraped_content/mount_sinai/processed/mount_sinai_processed.json"
+        web_content_path="scraped_content/processed/mount_sinai_processed.json",
+        pdf_content_path="scraped_content/processed/mount_sinai_pdfs_processed.json"
     )
     results = validator.validate_coverage()
     report = validator.generate_report(results)

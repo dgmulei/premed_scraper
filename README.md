@@ -1,118 +1,173 @@
-# Premed Scraper
+# Pre-Med School Content Analysis
 
-A collection of specialized web scrapers designed to extract and clean medical school admissions information. Each scraper is optimized for its specific institution's website structure and content organization.
+A comprehensive tool for analyzing medical school website content and PDF documents to assess coverage of key information categories that pre-med students need.
+
+## Overview
+
+This project provides automated analysis of medical school content to help identify strengths and gaps in how schools present critical information to prospective students. It uses advanced text analysis and GPT-4 to evaluate content coverage across essential categories like admissions requirements, financial information, curriculum details, and more.
 
 ## Features
 
-### Clean Text Processing
-- Advanced text cleaning and normalization
-- Smart content structuring
-- Semantic relationship preservation
-- Optimized for embedding
+### Smart Content Validation
+- Analyzes both website content and PDF documents
+- Uses intelligent category mapping with must-include terms
+- Calculates content relevance scores
+- Prioritizes most relevant content for analysis
+- Provides comprehensive coverage assessment
 
-### Institution-Specific Scrapers
+### Key Categories Analyzed
+1. Admissions Process & Requirements
+   - Application steps and timeline
+   - Academic requirements
+   - Standardized test requirements
+   - Selection criteria
+   - Interview process
+   - Special programs
 
-#### Mount Sinai (mtsinai_scraper.py)
-- Optimized for Icahn School of Medicine at Mount Sinai's HTML structure
-- Extracts:
-  * Admissions requirements
-  * Application deadlines
-  * Program information
-  * Contact details
-- Maintains content hierarchy
-- Preserves contextual relationships
+2. Financial Information
+   - Tuition and fees
+   - Financial aid availability
+   - Scholarships and grants
+   - Loan programs
+   - Cost of living considerations
+   - Financial planning resources
 
-#### AAMC (Coming Soon)
-- Will handle PDF documents
-- Will process multiple levels of content
-- Will maintain document relationships
+3. Curriculum & Academic Experience
+   - Curriculum overview
+   - Pre-clinical and clinical training
+   - Learning methods
+   - Evaluation systems
+   - Academic support
+   - Special programs
 
-## Setup
+4. Research & Scholarly Opportunities
+   - Research programs
+   - Mentorship
+   - Research funding
+   - Publication opportunities
+   - Research facilities
+   - Special tracks
 
-1. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows, use: venv\Scripts\activate
-```
+5. Clinical Experience & Training
+   - Clinical rotation structure
+   - Hospital sites
+   - Patient interaction
+   - Specialty exposure
+   - Clinical skills development
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
+6. Student Life & Support
+   - Wellness programs
+   - Housing
+   - Student organizations
+   - Mentoring
+   - Career counseling
+   - Campus facilities
+
+7. Special Programs & Opportunities
+   - Dual degree programs
+   - Special admission programs
+   - Research tracks
+   - Global health
+   - Community service
+   - Leadership development
+
+### Analysis Output
+- Coverage assessment (0-100%) for each aspect
+- Identified strengths with specific examples
+- Gaps in coverage
+- Website vs PDF content comparison
+- Specific recommendations for improvement
+
+## Components
+
+### Web Scraper
+- Scrapes medical school websites
+- Handles dynamic content
+- Extracts text and metadata
+- Processes multiple page types
+
+### PDF Processor
+- Extracts text from PDF documents
+- Handles nested content structure
+- Processes tables and metadata
+- Extracts key information
+
+### Smart Coverage Validator
+- Filters content by category
+- Calculates relevance scores
+- Requires must-include terms
+- Prioritizes most relevant content
+- Generates comprehensive analysis
 
 ## Usage
 
-### Mount Sinai Scraper
-```bash
-python mtsinai_scraper.py
+1. Configure the scraper for your target medical school website:
+```python
+scraper = MtSinaiScraper()
+scraper.scrape()
 ```
 
-The scraper will:
-1. Extract content from Mount Sinai's medical school admissions pages
-2. Clean and structure the content
-3. Save both raw and processed versions:
-   - `scraped_content/raw/mount_sinai_raw.json`
-   - `scraped_content/processed/mount_sinai_processed.json`
-
-## Output Structure
-
-### Raw Output
-```json
-{
-    "url": {
-        "title": "Page title",
-        "intro": ["Introduction paragraphs"],
-        "sections": [
-            {
-                "heading": "Section heading",
-                "content": ["Array of paragraphs"]
-            }
-        ],
-        "requirements": ["Array of requirements"],
-        "deadlines": ["Array of deadlines"],
-        "contact_info": ["Contact information"],
-        "links": [
-            {
-                "text": "Link text",
-                "url": "Full URL",
-                "context": "Surrounding context"
-            }
-        ]
-    }
-}
+2. Process PDF documents:
+```python
+processor = PDFProcessor()
+processor.process_pdfs()
 ```
 
-### Processed Output (Embedding-Ready)
-```json
-{
-    "url": {
-        "title": "Page title",
-        "text_chunks": [
-            "Introduction:\n\nIntroductory text",
-            "Section Heading\n\nSection content",
-            "Requirements and Prerequisites:\n\n• Requirement 1\n• Requirement 2",
-            "Important Dates and Deadlines:\n\n• Deadline 1\n• Deadline 2",
-            "Contact Information:\n\n• Contact details"
-        ]
-    }
-}
+3. Run the coverage validator:
+```python
+validator = SmartPreMedValidator(
+    school_name="Mount Sinai",
+    web_content_path="scraped_content/processed/mount_sinai_processed.json",
+    pdf_content_path="scraped_content/processed/mount_sinai_pdfs_processed.json"
+)
+results = validator.validate_coverage()
+report = validator.generate_report(results)
 ```
+
+## Requirements
+- Python 3.8+
+- OpenAI API key (for GPT-4 analysis)
+- Required Python packages in requirements.txt
+
+## Installation
+1. Clone the repository
+2. Install dependencies: `pip install -r requirements.txt`
+3. Set up environment variables in .env file:
+   - OPENAI_API_KEY=your_api_key
+
+## Output
+The validator generates a comprehensive report including:
+- Executive summary
+- Category-by-category analysis
+- Coverage assessments
+- Identified strengths and gaps
+- Specific recommendations
+
+Reports are saved in the reports directory with timestamps for easy reference.
 
 ## Project Structure
-
 ```
 premed_scraper/
-├── mtsinai_scraper.py     # Mount Sinai specific scraper
+├── mtsinai_scraper.py     # Web scraper implementation
+├── pdf_processor.py       # PDF processing functionality
+├── smart_coverage_validator.py  # Content analysis
 ├── requirements.txt       # Project dependencies
-├── README.md             # Project documentation
-└── scraped_content/      # Output directory
-    ├── raw/             # Raw JSON output
-    └── processed/       # Embedding-ready JSON
+├── .env                  # Environment variables
+├── scraped_content/      # Scraped and processed content
+│   └── processed/        # JSON files of processed content
+├── reports/              # Generated analysis reports
+└── logs/                 # Logging output
 ```
 
-## Future Development
+## Logging
+- Detailed logging of all operations
+- Progress tracking
+- Error handling
+- Performance metrics
 
-- Additional institution-specific scrapers
-- Automated scraping pipeline
-- Enhanced text processing features
-- Multi-institution data integration
+## Future Improvements
+- Support for additional medical schools
+- Enhanced PDF table extraction
+- More detailed content categorization
+- Interactive report generation
+- Comparative analysis across schools

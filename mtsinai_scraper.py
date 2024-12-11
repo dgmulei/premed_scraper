@@ -13,10 +13,12 @@ class ScraperConfig:
         self.output_dir = output_dir or 'scraped_content'
         self.raw_dir = os.path.join(self.output_dir, 'raw')
         self.processed_dir = os.path.join(self.output_dir, 'processed')
+        self.pdf_dir = os.path.join(self.output_dir, 'pdfs')  # New PDF directory
         
         # Create directories if they don't exist
         os.makedirs(self.raw_dir, exist_ok=True)
         os.makedirs(self.processed_dir, exist_ok=True)
+        os.makedirs(self.pdf_dir, exist_ok=True)  # Create PDF directory
         
         # Set file paths
         self.raw_file = os.path.join(self.raw_dir, 'mount_sinai_raw.json')
@@ -30,6 +32,7 @@ class MountSinaiScraper:
         self.visited_urls = set()
         self.content = {}
         self.text_cleaner = clean_text
+        self.downloaded_pdfs = set()  # Track downloaded PDFs
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
@@ -38,8 +41,9 @@ class MountSinaiScraper:
         handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         self.logger.addHandler(handler)
         
-        # Updated financial paths based on actual site structure
-        self.financial_paths = [
+        # Updated paths to include both financial and admissions
+        self.important_paths = [
+            # Financial paths
             '/education/financial-aid',
             '/education/student-financial-services',
             '/education/enhanced-scholarship-initiative',
@@ -52,56 +56,118 @@ class MountSinaiScraper:
             '/education/financial-aid/payment',
             '/education/financial-aid/scholarships',
             '/education/admissions/financial-aid',
-            '/education/medical/financial-aid'
+            '/education/medical/financial-aid',
+            # Admissions paths
+            '/education/medical/admissions',
+            '/education/medical/admissions/how-to-apply',
+            '/education/medical/admissions/requirements',
+            '/education/medical/admissions/selection-process',
+            '/education/medical/admissions/interview',
+            '/education/medical/admissions/timeline',
+            '/education/medical/admissions/mcat',
+            '/education/medical/admissions/prerequisites'
         ]
         
-        # Financial content keywords
-        self.financial_keywords = {
+        # Content keywords for categorization
+        self.content_keywords = {
+            # Financial categories
             'tuition': ['tuition', 'cost', 'fee', 'expense', 'payment', 'billing'],
             'aid': ['financial aid', 'fafsa', 'css profile', 'need-based', 'assistance'],
             'scholarships': ['scholarship', 'grant', 'award', 'merit'],
             'loans': ['loan', 'borrowing', 'repayment', 'debt'],
-            'cost_of_living': ['living expense', 'housing cost', 'budget', 'cost of attendance']
+            'cost_of_living': ['living expense', 'housing cost', 'budget', 'cost of attendance'],
+            # Admissions categories
+            'requirements': ['prerequisite', 'requirement', 'required course', 'academic preparation'],
+            'mcat': ['mcat', 'medical college admission test', 'standardized test'],
+            'gpa': ['gpa', 'grade point average', 'academic performance'],
+            'timeline': ['timeline', 'deadline', 'important date', 'application cycle'],
+            'interview': ['interview', 'mmi', 'multiple mini interview'],
+            'selection': ['selection', 'evaluation', 'criteria', 'holistic review']
         }
 
+    def download_pdf(self, url):
+        """Download and save PDF files"""
+        try:
+            if url in self.downloaded_pdfs:
+                return
+            
+            self.logger.info(f"Downloading PDF: {url}")
+            
+            # Extract filename from URL
+            filename = os.path.basename(urlparse(url).path)
+            if not filename.endswith('.pdf'):
+                filename += '.pdf'
+            
+            filepath = os.path.join(self.config.pdf_dir, filename)
+            
+            # Download PDF
+            response = self.session.get(url, stream=True)
+            response.raise_for_status()
+            
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            self.downloaded_pdfs.add(url)
+            self.logger.info(f"PDF saved to: {filepath}")
+            return filepath
+            
+        except Exception as e:
+            self.logger.error(f"Error downloading PDF {url}: {str(e)}")
+            return None
+
     def should_follow_link(self, url):
-        """Determine if a link should be followed"""
+        """Enhanced link following logic"""
         if not url.startswith(self.base_url):
             return False
+        
         path = urlparse(url).path.lower()
-        return any(keyword in path for keyword in ['financial', 'tuition', 'scholarship', 'aid', 'admissions'])
+        
+        # Always download PDFs
+        if path.endswith('.pdf'):
+            self.download_pdf(url)
+            return False  # Don't try to scrape PDFs as HTML
+        
+        keywords = [
+            'financial', 'tuition', 'scholarship', 'aid', 
+            'admissions', 'apply', 'requirements', 'mcat',
+            'interview', 'selection', 'timeline', 'prerequisites',
+            'curriculum', 'academic'
+        ]
+        return any(keyword in path for keyword in keywords)
 
     def get_page(self, url):
-        """Enhanced page fetching with better error handling"""
+        """Enhanced page fetching with better error handling and anti-blocking measures"""
         try:
             self.logger.info(f"Fetching: {url}")
-            time.sleep(2)  # Respectful delay
+            time.sleep(3)  # Increased delay to avoid blocking
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
                 'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0',
+                'TE': 'Trailers',
             }
             
-            # Follow redirects to handle alternative paths
             response = self.session.get(url, headers=headers, timeout=30, allow_redirects=True)
             
             if response.history:
                 self.logger.info(f"Redirected from {url} to {response.url}")
-                # Add new financial paths if discovered
-                if any(keyword in response.url.lower() for keyword in ['financial', 'tuition', 'scholarship', 'aid']):
-                    new_path = urlparse(response.url).path
-                    if new_path not in self.financial_paths:
-                        self.financial_paths.append(new_path)
+                new_path = urlparse(response.url).path
+                if new_path not in self.important_paths:
+                    self.important_paths.append(new_path)
             
             response.raise_for_status()
             return response.text
             
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
-                # Try alternative paths
-                alt_paths = [p for p in self.financial_paths if p not in url]
+                alt_paths = [p for p in self.important_paths if p not in url]
                 for path in alt_paths:
                     alt_url = urljoin(self.base_url, path)
                     try:
@@ -111,19 +177,28 @@ class MountSinaiScraper:
                             return alt_response.text
                     except:
                         continue
+            elif e.response.status_code == 429 or e.response.status_code == 403:
+                self.logger.warning(f"Rate limited or blocked. Waiting 60 seconds...")
+                time.sleep(60)  # Wait longer if blocked
+                try:
+                    response = self.session.get(url, headers=headers, timeout=30)
+                    if response.ok:
+                        return response.text
+                except:
+                    pass
             self.logger.error(f"Error fetching {url}: {str(e)}")
             return None
         except Exception as e:
             self.logger.error(f"Error fetching {url}: {str(e)}")
             return None
 
-    def extract_financial_content(self, text, section_title):
-        """Enhanced financial content extraction"""
+    def extract_content_by_category(self, text, section_title):
+        """Enhanced content extraction with both financial and admissions categories"""
         content_type = None
+        section_lower = section_title.lower()
         
         # Determine content type based on section title and keywords
-        section_lower = section_title.lower()
-        for category, keywords in self.financial_keywords.items():
+        for category, keywords in self.content_keywords.items():
             if any(keyword in section_lower for keyword in keywords):
                 content_type = category
                 break
@@ -133,29 +208,39 @@ class MountSinaiScraper:
         if not cleaned_text:
             return None, None
             
-        # Extract specific financial information
-        if content_type == 'tuition':
-            # Look for currency amounts and semester/year indicators
-            amounts = re.findall(r'\$[\d,]+(?:\.\d{2})?(?:\s*(?:per|/)\s*(?:semester|year|term))?', cleaned_text)
-            if amounts:
-                cleaned_text = f"Tuition and Fees: {', '.join(amounts)}\n{cleaned_text}"
-                
-        elif content_type == 'aid':
-            # Look for application deadlines and requirements
-            deadlines = re.findall(r'(?:deadline|due|by)[:\s].*?(?:\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})', cleaned_text)
-            if deadlines:
-                cleaned_text = f"Important Deadlines: {', '.join(deadlines)}\n{cleaned_text}"
-                
-        elif content_type == 'scholarships':
-            # Look for award amounts and eligibility criteria
-            awards = re.findall(r'(?:award|scholarship)[:\s].*?(?:\$[\d,]+(?:\.\d{2})?|full tuition)', cleaned_text)
-            if awards:
-                cleaned_text = f"Available Awards: {', '.join(awards)}\n{cleaned_text}"
+        # Extract specific information based on content type
+        if content_type:
+            # Financial information extraction
+            if content_type in ['tuition', 'aid', 'scholarships', 'loans', 'cost_of_living']:
+                amounts = re.findall(r'\$[\d,]+(?:\.\d{2})?(?:\s*(?:per|/)\s*(?:semester|year|term))?', cleaned_text)
+                if amounts:
+                    cleaned_text = f"Amount Information: {', '.join(amounts)}\n{cleaned_text}"
+            
+            # Admissions information extraction
+            elif content_type == 'requirements':
+                requirements = re.findall(r'(?:required|prerequisite):[^.]*\.', cleaned_text, re.I)
+                if requirements:
+                    cleaned_text = f"Required Courses/Prerequisites: {' '.join(requirements)}\n{cleaned_text}"
+                    
+            elif content_type == 'mcat':
+                scores = re.findall(r'\d{3}(?:\s*-\s*\d{3})?(?:\s*or\s*above)?', cleaned_text)
+                if scores:
+                    cleaned_text = f"MCAT Scores: {', '.join(scores)}\n{cleaned_text}"
+                    
+            elif content_type == 'gpa':
+                gpas = re.findall(r'\d+\.\d+(?:\s*-\s*\d+\.\d+)?(?:\s*or\s*above)?', cleaned_text)
+                if gpas:
+                    cleaned_text = f"GPA Requirements: {', '.join(gpas)}\n{cleaned_text}"
+                    
+            elif content_type == 'timeline':
+                dates = re.findall(r'(?:deadline|due date|by)[:\s].*?(?:\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})', cleaned_text)
+                if dates:
+                    cleaned_text = f"Important Dates: {', '.join(dates)}\n{cleaned_text}"
         
         return content_type, cleaned_text
 
     def extract_content(self, soup, url):
-        """Enhanced content extraction with better financial information handling"""
+        """Enhanced content extraction with better categorization"""
         content = {
             'url': url,
             'title': '',
@@ -168,9 +253,14 @@ class MountSinaiScraper:
                 'loans': [],
                 'cost_of_living': []
             },
-            'requirements': [],
-            'deadlines': [],
-            'contact_info': []
+            'admissions_info': {
+                'requirements': [],
+                'mcat': [],
+                'gpa': [],
+                'timeline': [],
+                'interview': [],
+                'selection': []
+            }
         }
         
         # Extract title
@@ -199,11 +289,14 @@ class MountSinaiScraper:
                     section_text += text + '\n'
             
             if section_text:
-                # Check if this is financial content
-                content_type, processed_text = self.extract_financial_content(section_text, section_title)
+                # Categorize and process content
+                content_type, processed_text = self.extract_content_by_category(section_text, section_title)
                 
-                if content_type and processed_text:
-                    content['financial_info'][content_type].append(processed_text)
+                if content_type:
+                    if content_type in content['financial_info']:
+                        content['financial_info'][content_type].append(processed_text)
+                    elif content_type in content['admissions_info']:
+                        content['admissions_info'][content_type].append(processed_text)
                 else:
                     content['sections'].append({
                         'heading': section_title,
@@ -213,20 +306,19 @@ class MountSinaiScraper:
         return content
 
     def scrape(self):
-        """Enhanced scraping method with better financial content handling"""
-        # Start with financial aid pages
-        pages_to_visit = [urljoin(self.base_url, path) for path in self.financial_paths]
-        
-        # Add other important pages
-        pages_to_visit.extend([
-            f"{self.base_url}/education/medical/admissions",
-            f"{self.base_url}/education/medical/curriculum-program",
-            f"{self.base_url}/education/medical/student-affairs"
-        ])
+        """Enhanced scraping method with better content handling"""
+        # Start with important pages
+        pages_to_visit = [urljoin(self.base_url, path) for path in self.important_paths]
         
         while pages_to_visit:
             url = pages_to_visit.pop(0)
             if url in self.visited_urls:
+                continue
+            
+            # Handle PDFs
+            if url.lower().endswith('.pdf'):
+                self.download_pdf(url)
+                self.visited_urls.add(url)
                 continue
             
             html = self.get_page(url)
@@ -239,7 +331,7 @@ class MountSinaiScraper:
             content = self.extract_content(soup, url)
             self.content[url] = content
             
-            # Find additional financial aid related links
+            # Find additional relevant links
             for link in soup.find_all('a', href=True):
                 href = link['href']
                 if href and not href.startswith('#'):
@@ -253,7 +345,7 @@ class MountSinaiScraper:
         self.save_results()
 
     def save_results(self):
-        """Enhanced results saving with better financial information organization"""
+        """Enhanced results saving with better organization"""
         # Save raw content
         with open(self.config.raw_file, 'w', encoding='utf-8') as f:
             json.dump(self.content, f, indent=2, ensure_ascii=False)
@@ -266,7 +358,7 @@ class MountSinaiScraper:
                 'text_chunks': []
             }
             
-            # Add financial information first
+            # Add financial information
             financial_sections = [
                 ('Tuition and Fees', content['financial_info']['tuition']),
                 ('Financial Aid', content['financial_info']['aid']),
@@ -275,7 +367,18 @@ class MountSinaiScraper:
                 ('Cost of Living', content['financial_info']['cost_of_living'])
             ]
             
-            for section_name, section_content in financial_sections:
+            # Add admissions information
+            admissions_sections = [
+                ('Academic Requirements', content['admissions_info']['requirements']),
+                ('MCAT Information', content['admissions_info']['mcat']),
+                ('GPA Requirements', content['admissions_info']['gpa']),
+                ('Application Timeline', content['admissions_info']['timeline']),
+                ('Interview Process', content['admissions_info']['interview']),
+                ('Selection Criteria', content['admissions_info']['selection'])
+            ]
+            
+            # Process all sections
+            for section_name, section_content in financial_sections + admissions_sections:
                 if section_content:
                     chunk = f"{section_name}\n\n"
                     chunk += '\n\n'.join(section_content)
@@ -297,6 +400,8 @@ class MountSinaiScraper:
         
         self.logger.info(f"Raw results saved to {self.config.raw_file}")
         self.logger.info(f"Processed results saved to {self.config.processed_file}")
+        if self.downloaded_pdfs:
+            self.logger.info(f"Downloaded PDFs saved to {self.config.pdf_dir}")
 
 if __name__ == "__main__":
     output_dir = os.getenv('SCRAPER_OUTPUT_DIR')
